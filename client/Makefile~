@@ -1,0 +1,4 @@
+client: 
+	cc -g -std=c99 -Wall -c client client.c
+clean:
+	rm client
