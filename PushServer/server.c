@@ -244,10 +244,10 @@ char * getSendNotice(struct QueueNoticeDay *id_queue_day,
         strcat(str, str_period);
         free(str_day);
         free(str_period);
-    } else if (str_day > 0) {
+    } else if (str_day_len > 0) {
         str = str_day;
         free(str_period);
-    } else if (str_period > 0) {
+    } else if (str_period_len > 0) {
         str = str_period;
         free(str_day);
     } else { //length strings : str_day and str_period equals 0  
