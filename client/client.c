@@ -11,172 +11,237 @@
 #include <signal.h>
 #include <gtk/gtk.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <time.h>
+#include <fcntl.h>
 
 #define SEND_NOTICE 58  /* 8 bit for time, 50 bit for text */
-#define RECV_NOTICE_SIZE 50
-#define PORT 5250
-#define COUNTPORT 10
+#define RECV_NOTICE_SIZE 50 /* максимальное количество символов в напоминании*/ 
+#define PORT 5250 /* Порт который слушаем */
 
 struct Notice {
     int time_begin;
     int time_period;
-    //char *text;
     char text[RECV_NOTICE_SIZE];
 };
 
-struct ServerSocket {
-    struct sockaddr_in serverAddr;
-    int port;
-    int socket;
+char *server; // Ip адрес сервера
+
+int CreateClientUDPSocket(); // Создание UDP сокета
+int CreateClientTCPSocket(); // Создание TCP сокета
+int SendNotice(int sock); // Отправка сообщений на серврер
+int fillNotice(); //Заполнение напоминания данными, перед отправкой на сервер
+void RecvNotice(); // Ожидаем напоминаний по времени
+void FreeNotice(int id); // Удаление напоминаний на сервере
+int getDisplayMode(); // Режим отображения напоминаний
+void printNoticeGUI(char * str); // отображаем напоминания в ГУИ
+void printNoticeCLI(char * str); // отображаем напоминания в консоли
+int exitNotice(int exit); // завершение напоминаний, сообщаем об этом серверу
+int getId(int id); // получить идеинтификатор клиента
+void DieWithError(const char *msg); // Критические ошибки и аварийное завершение
+
+void signint(int signo) { // Обработка сигнала Ctrl^C
     int id;
-};
-char *server;
-
-int CreateClientUDPSocket(int number_client);
-int CreateClientTCPSocket();
-int SendNotice(int sock);
-void RecvNotice(int id);
-void FreeNotice(int id);
-int exitNotice(int exit);
-void DieWithError(const char *msg);
-
-void sigint(int signo) {
-    if (signo == SIGINT) {
-        exitNotice(1);
-    }
+    exitNotice(1);
+    id = getId(0);
+    FreeNotice(id);
 }
 
 int main(int argc, char *argv[]) {
     int id; // unique id client - number client on server
     int sock;
-    
+
     if (argc == 2)
         server = argv[1];
-    
-    /* exit program on signal SIGKILL, his number 9 */
+    else {
+        DieWithError("usage: ./client ip_server\n");
+    }
+    /* exit program on signal SIGINT */
     struct sigaction s;
-    s.sa_handler = sigint;
+    s.sa_handler = signint;
     s.sa_flags = 0;
     sigemptyset(&s.sa_mask);
     sigaction(SIGINT, &s, NULL);
-    
-    sock = CreateClientTCPSocket();
 
+    sock = CreateClientTCPSocket();
     id = SendNotice(sock);
+    getId(id); // save unique id in this function in 'flag'
     RecvNotice(id);
+
     return 0;
 }
 
 int SendNotice(int sock) {
     int id;
+    int err;
     int action = 0;
-    int hour, min, period;
     struct Notice *note;
     note = (struct Notice *) malloc(sizeof (struct Notice));
     memset(note, 0, sizeof (struct Notice));
     /* get id from server */
-    note->time_begin = -2;
-    send(sock, note, SEND_NOTICE, 0);
+    note->time_begin = -1;
+    if ((err = send(sock, note, SEND_NOTICE, 0)) < 0)
+        DieWithError("send(), failed.");
     memset(note, 0, sizeof (struct Notice));
-    recv(sock, note, SEND_NOTICE, 0);
+    if ((err = recv(sock, note, SEND_NOTICE, 0)) < 0)
+        DieWithError("recv(), failed.");
     id = note->time_begin;
     printf("id %d\n", id);
     while (action != 3) {
-        printf("Select the action:\n");
-        printf("\t 1 - add Notice every day\n");
-        printf("\t 2 - add Notice with periodic\n");
-        printf("\t 3 - complete create notice\n");
-        scanf("%d", &action);
-        switch (action) {
-            case 1:
-                printf("Write time notice: <hour> <minutes>\n");
-                printf("Example, where 10 -hour, 25 -minutes: 10 25\n");
-                printf("Write time notice: ");
-                scanf("%d%d", &hour, &min);
-                period = 0;
-                printf("Write text of notice: ");
-                scanf("%s", note->text);
-                break;
-            case 2:
-                printf("Write time notice: <hour> <minutes> <period_minutes>\n");
-                printf("Example, where 10 -hour, 25 -minutes, 30 - period: 10 25 30\n");
-                printf("Write time notice: ");
-                scanf("%d%d%d", &hour, &min, &period);
-                printf("Write text of notice: ");
-                fgets(note->text, RECV_NOTICE_SIZE, stdin);
-                break;
-            case 3:
-                hour = 0;
-                min = -1;
-                break;
-        }
-        note->time_begin = hour * 60 * 60 + min * 60;
-        note->time_period = period * 60;
-        send(sock, note, SEND_NOTICE, 0);
-        scanf("%*[^\n]");
+        memset(note, 0, sizeof (struct Notice));
+        action = fillNotice(note);
+        if ((err = send(sock, note, SEND_NOTICE, 0)) < 0)
+            DieWithError("send(), failed.");
     }
     printf("Notices creates.\n");
     close(sock);
     return id;
 }
 
-void RecvNotice(int id) {
-    int sock;
-    int recvStringlen;
-    char *recvString;
-    struct sockaddr_in udpAddrRecv, cmpAddr;
-    int udpAddrRecv_len;
-
-    recvString = (char*)malloc(RECV_NOTICE_SIZE+1);
-    memset(recvString, 0, sizeof(recvString));
-    memset(&cmpAddr, 0, sizeof(cmpAddr));
-    sock = CreateClientUDPSocket(id);
-        /* Receive datagram from neibors host */
+int fillNotice(struct Notice *note) {
+    int action = 0;
+    static int count = 0; // Count create Remind's
+    int n;
+    int hour, min, period;
     while (1) {
-        memset(&udpAddrRecv, 0, sizeof (udpAddrRecv));
-        if ((recvStringlen = recvfrom(sock, recvString, RECV_NOTICE_SIZE, 0,
-                (struct sockaddr *) &udpAddrRecv, &udpAddrRecv_len)) < 0)
-            DieWithError("recvfrom(), failed \n");
+        printf("Select the action:\n");
+        printf("\t 1 - add Notice every day\n");
+        printf("\t 2 - add Notice with periodic\n");
+        printf("\t 3 - complete create notice\n");
+        n = scanf("%d", &action);
+        if (action == 1 || action == 2)
+            count++; // exist > than 1 element
+        if (n == 1 && action > 0 && action < 4 && count > 0)
+            break;
+        scanf("%*[^\n]"); // сброс буфера scanf
+    }
+    switch (action) {
+        case 1:
+            while (1) {
+                printf("Write time notice: <hour(0-23)> <minutes(0-60)>\n");
+                printf("Example (wrote two numbers): 10 25\n");
+                printf("Write time notice: ");
+                n = scanf("%d%d", &hour, &min);
+                if ((n == 2) && (hour >= 0 && hour < 24)
+                        && (min >= 0 && min <= 60))
+                    break;
+                scanf("%*[^\n]"); // сброс буфера scanf
+            }
+            printf("Write text of notice(no more than %d symbols): ",
+                    (int) RECV_NOTICE_SIZE);
+            while (1) {
+                fgets(note->text, RECV_NOTICE_SIZE, stdin);
+                if (strcmp(note->text, "\n") != 0) {
+                    note->text[strlen(note->text) - 1] = '\0';
+                    break;
+                }
+            }
+            period = 0;
+            break;
+        case 2:
+            while (1) {
+                printf("Write time notice: <hour(0-23)> <minutes(0-60)> "
+                        "<period_minutes(0-1440)>\n");
+                printf("Example (wrote three numbers): 10 25 30\n");
+                printf("Write time notice: ");
+                n = scanf("%d%d%d", &hour, &min, &period);
+                if ((n == 3) && (hour >= 0 && hour < 24)
+                        && (min >= 0 && min <= 60)
+                        && (period > 0 && period < 1440))
+                    break;
+                scanf("%*[^\n]"); // сброс буфера scanf
+            }
+            printf("Write text of notice(no more than %d symbols): ",
+                    (int) RECV_NOTICE_SIZE);
+            while (1) {
+                fgets(note->text, RECV_NOTICE_SIZE, stdin);
+                if (strcmp(note->text, "\n") != 0) {
+                    note->text[strlen(note->text) - 1] = '\0';
+                    break;
+                }
+            }
+            break;
+        case 3:
+            hour = 0;
+            min = -1;
+            break;
+    }
+    /* translate time in seconds */
+    note->time_begin = hour * 60 * 60 + min * 60;
+    note->time_period = period * 60;
+    return action;
+}
 
-        if (strcmp(recvString, " ") != 0) { // exit from while
-            // print notice in window use gtk
-            GtkWidget *label;
-            GtkWidget *window;
-            gtk_init(0, 0);
-            window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-            gtk_window_set_title(GTK_WINDOW(window), "Hello");
-            label = gtk_label_new(recvString);
-            gtk_container_add(GTK_CONTAINER(window), label);
-            gtk_widget_show_all(window);
-            g_signal_connect(G_OBJECT(window), "destroy", G_CALLBACK(gtk_main_quit), NULL);
-            gtk_main();
-        }
-        if (exitNotice(0) == 0){  /* signal KILL -> exit from while*/
-            FreeNotice(id);
-            break;   
+void RecvNotice() {
+    int sock = 0;
+    int mode = 0;
+    int fail_time = 120; // задержка по времени 120 секунд, отклика от сервера
+    int recvStringlen = 0;
+    char recvString[RECV_NOTICE_SIZE] = {0};
+    struct sockaddr_in udpAddrRecv = {0};
+    socklen_t udpAddrRecv_len = 0;
+
+    sock = CreateClientUDPSocket();
+    fcntl(sock, F_SETFL, O_NONBLOCK);
+    mode = getDisplayMode();
+    /* Receive datagram from neibors host */
+    while (1) {
+        memset(recvString, '\0', RECV_NOTICE_SIZE);
+        fd_set set;
+        struct timeval tv;
+        FD_ZERO(&set);
+        FD_SET(sock, &set);
+        tv.tv_sec = 1;
+        tv.tv_usec = 500000;
+        select(sock+1, &set, NULL, NULL, &tv);
+        if (FD_ISSET(sock, &set)) {
+            // Есть данные для чтения
+            if ((recvStringlen = recvfrom(sock, recvString, RECV_NOTICE_SIZE, 0,
+                    (struct sockaddr *) &udpAddrRecv, &udpAddrRecv_len)) < 0) {
+                if (exitNotice(0) == 0) break;
+            }
+            recvString[strlen(recvString)] = '\0';
+            if ((strcmp(recvString, ".") != 0) &&
+                    (strcmp(recvString, " ") != 0)) { // Print Remind's
+                if (mode == 1)
+                    printNoticeGUI(recvString);
+                else
+                    printNoticeCLI(recvString);
+            }
+            if (exitNotice(0) == 0) { /* signal KILL -> exit from while*/
+                break;
+            }
+            fail_time = 120;
+        } else {
+            printf("client connection failed. Check connection internet!\n");
+            sleep(1);
+            fail_time--;
+            if (fail_time < 0)
+                DieWithError("Connection failed. Droped.\n");
         }
     }
-    free(recvString);
-    return;
 }
 
 void FreeNotice(int id) {
     int sock;
+    int err;
     struct Notice note;
     memset(&note, 0, sizeof (note));
     sock = CreateClientTCPSocket();
 
-    note.time_begin = -1;
+    note.time_begin = -2;
     note.time_period = id;
-    send(sock, &note, sizeof (note), 0);
+    if ((err = send(sock, &note, sizeof (note), 0)) < 0)
+        DieWithError("send(), failed.");
     close(sock);
+
     return;
 }
 
-int CreateClientUDPSocket(int number_client) {
+int CreateClientUDPSocket() {
     int sock; /* socket to create */
     struct sockaddr_in serverAddr; /* Local address */
-
     /* Create a best-effort datagram socket using UDP */
     if ((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
         DieWithError("socket() failed");
@@ -184,14 +249,13 @@ int CreateClientUDPSocket(int number_client) {
     /* Construct bind structure */
     memset(&serverAddr, 0, sizeof (serverAddr)); /* Zero out structure */
     serverAddr.sin_family = AF_INET; /* Internet address family */
-    if (inet_aton(server, &serverAddr.sin_addr) == 0)
-        DieWithError("inet_aton() failed");
-    
+    serverAddr.sin_port = htons(PORT); /* Server port */
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
     /* Bind to the broadcast port */
-    serverAddr.sin_port = htons(PORT + number_client -1); /* Server port */
     if (0 > bind(sock, (struct sockaddr *) &serverAddr, sizeof (serverAddr)))
-        DieWithError("bind failed(). Max client.");
-    
+        DieWithError("bind failed().");
+
     return sock;
 }
 
@@ -217,14 +281,60 @@ int CreateClientTCPSocket() {
     return sock;
 }
 
+int getDisplayMode() {
+    int n, mode;
+    while (1) {
+        printf("Select reminders display mode:\n \t1 - GUI\n\t2 - CLI\n");
+        n = scanf("%d", &mode);
+        if (n == 1 && (mode == 1 || mode == 2)) {
+
+            break;
+        }
+        scanf("%*[^\n]"); // сброс буфера scanf
+    }
+    return mode;
+}
+
+void printNoticeGUI(char * str) {
+
+    GtkWidget *label;
+    GtkWidget *window;
+    gtk_init(0, 0);
+    //export NO_AT_BRIDGE=1
+    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), "Notice");
+    label = gtk_label_new(str);
+    gtk_container_add(GTK_CONTAINER(window), label);
+    gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
+    gtk_window_set_default_size(GTK_WINDOW(window), 400, 200);
+    gtk_widget_show_all(window);
+    g_signal_connect(G_OBJECT(window), "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    gtk_main();
+}
+
+void printNoticeCLI(char * str) {
+
+    printf("Remind: %s\n", str);
+}
+
 int exitNotice(int exit) {
     static int stop = 1;
     if (exit == 1)
         stop--;
+
     return stop;
 }
 
+int getId(int id) {
+    static int flag = 0;
+    if (flag == 0)
+        flag += id;
+
+    return flag;
+}
+
 void DieWithError(const char *msg) {
+    printf("Check your Internet connection. Try again!\n");
     perror(msg);
     exit(0);
 }

@@ -3,6 +3,8 @@
 struct QueueNoticeDay * createQueueNoticeDay() {
     struct QueueNoticeDay *id_queue;
     id_queue = (struct QueueNoticeDay*) malloc(sizeof (struct QueueNoticeDay));
+    id_queue->start = NULL;
+    id_queue->tail = NULL;
     return id_queue;
 }
 
@@ -10,11 +12,9 @@ void addNoticeDay(struct QueueNoticeDay *id_queue, char * text,
         long int time_sec_begin) {
     int i;
     struct NoticeDay *element = (struct NoticeDay *) malloc(sizeof (struct NoticeDay));
-    printf("start add\n");
     for (i = 0; i < strlen(text); i++)
         element->text[i] = text[i];
     element->text[i] = '\0';
-    printf("middle add\n");
     element->time_sec_begin = time_sec_begin;
     element->next = NULL;
     if (id_queue->tail == NULL) {
@@ -23,17 +23,12 @@ void addNoticeDay(struct QueueNoticeDay *id_queue, char * text,
         (id_queue->tail)->next = element;
     }
     id_queue->tail = element;
-    printf("exit add\n");
-    //static int count_el = 0; // сколько всего было добавлено элементов в очередь
-    //count_el++;
-    //printf("    count elements pushed * %d\n", count_el);
-    //pthread_mutex_unlock(&id_queue->mutex);
 }
 
 char * returnNoticeDay(struct QueueNoticeDay *id_queue, int time_sec) {
     char *str = NULL;
     int i;
-    
+
     if (id_queue != NULL) {
         str = (char *) malloc(sizeof (char));
         str[0] = '\0';
@@ -59,11 +54,15 @@ char * returnNoticeDay(struct QueueNoticeDay *id_queue, int time_sec) {
 }
 
 void freeQueueNoticeDay(struct QueueNoticeDay *id_queue) {
-    struct NoticeDay *step;
-    while (id_queue->start != NULL) {
-        step = id_queue->start;
-        id_queue->start = (id_queue->start)->next;
-        free(step);
+    if (id_queue != NULL) {
+        struct NoticeDay *step;
+        while (id_queue->start != NULL) {
+            step = id_queue->start;
+            id_queue->start = (id_queue->start)->next;
+            free(step);
+        }
+        free(id_queue);
     }
+    id_queue = NULL;
 }
 

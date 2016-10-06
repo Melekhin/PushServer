@@ -3,6 +3,8 @@
 struct QueueNoticePeriod * createQueueNoticePeriod() {
     struct QueueNoticePeriod *id_queue;
     id_queue = (struct QueueNoticePeriod *) malloc(sizeof (struct QueueNoticePeriod));
+    id_queue->start = NULL;
+    id_queue->tail = NULL;
     return id_queue;
 }
 
@@ -28,7 +30,7 @@ char * returnNoticePeriod(struct QueueNoticePeriod *id_queue, int time_sec) {
     char *str = NULL;
     int i = 0;
     int number = 0;
-    
+
     if (id_queue != NULL) {
         str = (char *) malloc(sizeof (char));
         str[0] = '\0';
@@ -56,10 +58,14 @@ char * returnNoticePeriod(struct QueueNoticePeriod *id_queue, int time_sec) {
 }
 
 void freeQueueNoticePeriod(struct QueueNoticePeriod *id_queue) {
-    struct NoticePeriod *step;
-    while (id_queue->start != NULL) {
-        step = id_queue->start;
-        id_queue->start = (id_queue->start)->next;
-        free(step);
+    if (id_queue != NULL) {
+        struct NoticePeriod *step;
+        while (id_queue->start != NULL) {
+            step = id_queue->start;
+            id_queue->start = (id_queue->start)->next;
+            free(step);
+        }
+        free (id_queue);
     }
+    id_queue = NULL;
 }

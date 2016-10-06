@@ -15,11 +15,14 @@ struct QueueNoticeDay {
     struct NoticeDay *start;
     struct NoticeDay *tail;
 };
-
+/* Создание списка с ежедневными напоминаниями */
 struct QueueNoticeDay * createQueueNoticeDay();
-void addNoticeDay(struct QueueNoticeDay *id_queue, char * text,
+/* Добавление напоминания в список */
+void addNoticeDay(struct QueueNoticeDay *id_queue, char * text, 
         long int time_sec_begin);
+/* Получение текста напоминания, когда время пришло */
 char * returnNoticeDay(struct QueueNoticeDay *id_queue, int time_sec);
+/* Удаление всего списка напоминаний */
 void freeQueueNoticeDay(struct QueueNoticeDay *id_queue);
 #endif /* NOTICEDAY_H */
 
